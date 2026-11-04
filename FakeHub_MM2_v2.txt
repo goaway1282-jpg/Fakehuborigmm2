@@ -1,0 +1,1399 @@
+--[[
+  FAKE HUB v2 для твоєї копії MM2 в Roblox Studio
+  Куди вставити: StarterGui -> LocalScript (НЕ Script) -> весь цей код.
+  Якщо щось не працює: View -> Output, і скинь мені червоні помилки.
+  Назви предметів у твоїй копії можуть бути іншими, тоді міняй ці три рядки:
+]]
+local KNIFE_NAME = "Knife"
+local GUN_NAME = "Gun"
+local AUTOLOAD = "" -- сюди можна вставити текст з Export Config, і налаштування будуть вантажитись самі
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("RunService")
+local TS = game:GetService("TeleportService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
+local TextChatService = game:GetService("TextChatService")
+local plr = Players.LocalPlayer
+local cam = workspace.CurrentCamera
+
+-- ================= налаштування за замовчуванням =================
+local DEFAULTS = {
+	-- Sheriff
+	aim = false, aimTarget = "Murderer", aimPart = "Head", fov = 150, smooth = 40,
+	fovCircle = true, fovColor = "Blue", maxDist = 600, visAim = false, predict = false,
+	autoShoot = false, shootDelay = 8, fireButton = false, hitPreview = false,
+	-- Murderer
+	stab = false, stabRange = 12, stabDelay = 3, faceTarget = true, stabTp = false, tpRange = 35,
+	autoThrow = false, throwRange = 60, throwDelay = 15, throwButton = false,
+	-- Visuals
+	esp = false, chams = false, box = false, names = true, roles = true, weapons = false,
+	dist = true, health = false, tracers = false, headCircle = false, skeleton = false,
+	radar = false, radarShape = "Circle", radarSize = 150, radarRange = 150,
+	espDist = 1500, visCheck = false, colMurd = "Red", colSher = "Blue", colInno = "Green",
+	espAlpha = 0, lineThick = 1, textSize = 13, espFont = "GothamBold", textStroke = true,
+	rainbow = false, espEvery = 1, espPreset = "Default",
+	-- Player
+	speed = 16, jump = 50, highJump = false, fly = false, flySpeed = 60, noclip = false,
+	ghost = false, spin = false, spinMode = "Left", spinSpeed = 10, bhop = false, bhopPower = 50,
+	wallHop = false, infJump = false, gravity = 196, fovCam = 70,
+	-- Teleport
+	mapLoc = "", savedPos = "", posName = "Pos1", tpPlayer = "", cx = "0", cy = "50", cz = "0",
+	-- Farm
+	farm = false, collectItems = false, coinName = "Coin", itemName = "Item",
+	farmInterval = 2, farmMax = 12, notify = true,
+	-- Animations
+	animId = "", animSpeed = 10, emote = "Wave", animFav = "",
+	-- Music
+	musicId = "", volume = 5, pitch = 10, loop = false, boombox = false,
+	reverb = false, echo = false, distortion = false, musicSel = "",
+	-- Chat
+	chatMsg = "", quickMsg = "GG",
+	-- Users
+	userRoles = true, userDist = true,
+	-- Mobile
+	mobileUI = false, btnSize = 60, btnX = 88, btnY = 55,
+	-- Config
+	cfgName = "Config1", cfgSel = "", cfgPreset = "Legit",
+	-- Settings
+	uiScale = 100, uiOpacity = 0, menuKey = "RightShift", openAnim = true, theme = "Blue", lowPerf = false,
+}
+if UIS.TouchEnabled and not UIS.KeyboardEnabled then DEFAULTS.uiScale = 75 end
+
+local C = {}
+for k, v in pairs(DEFAULTS) do C[k] = v end
+
+local COLORS = {
+	Red = Color3.fromRGB(255, 60, 60), Blue = Color3.fromRGB(60, 140, 255),
+	Green = Color3.fromRGB(60, 220, 100), Yellow = Color3.fromRGB(255, 220, 60),
+	White = Color3.fromRGB(255, 255, 255), Purple = Color3.fromRGB(160, 90, 255),
+	Orange = Color3.fromRGB(255, 150, 50), Cyan = Color3.fromRGB(60, 230, 230),
+	Pink = Color3.fromRGB(255, 100, 200),
+}
+local COLOR_NAMES = {"Red", "Blue", "Green", "Yellow", "White", "Purple", "Orange", "Cyan", "Pink"}
+local THEME_NAMES = {"Blue", "Purple", "Green", "Red", "Orange"}
+local FONT_NAMES = {"Gotham", "GothamBold", "Code", "SourceSans", "SourceSansBold", "Arcade", "Fantasy"}
+local ROLEKEY = {Murderer = "colMurd", Sheriff = "colSher", Innocent = "colInno"}
+
+local DARK = Color3.fromRGB(20, 20, 24)
+local MID = Color3.fromRGB(30, 30, 36)
+local LIGHT = Color3.fromRGB(45, 45, 55)
+local WHITE = Color3.new(1, 1, 1)
+
+local reg = {}       -- ключ -> функція оновлення віджета
+local themeFns = {}  -- функції, що перефарбовуються при зміні теми
+local A = {}         -- дії (стрільба, удар тощо)
+
+local function accent() return COLORS[C.theme] or COLORS.Blue end
+local function themed(fn) fn() table.insert(themeFns, fn) end
+
+local function new(class, props, parent)
+	local o = Instance.new(class)
+	for k, v in pairs(props or {}) do o[k] = v end
+	o.Parent = parent
+	return o
+end
+local function corner(o, r) return new("UICorner", {CornerRadius = UDim.new(0, r)}, o) end
+
+-- ================= допоміжні функції гри =================
+local function charParts(p)
+	local c = (p or plr).Character
+	if not c then return end
+	return c, c:FindFirstChildOfClass("Humanoid"), c:FindFirstChild("HumanoidRootPart")
+end
+
+local function hasTool(p, name)
+	local c = p.Character
+	local b = p:FindFirstChild("Backpack")
+	return (c and c:FindFirstChild(name)) or (b and b:FindFirstChild(name))
+end
+
+local function roleOf(p)
+	if hasTool(p, KNIFE_NAME) then return "Murderer" end
+	if hasTool(p, GUN_NAME) then return "Sheriff" end
+	return "Innocent"
+end
+
+local function weaponOf(p)
+	local c = p.Character
+	if c then for _, t in ipairs(c:GetChildren()) do if t:IsA("Tool") then return t.Name end end end
+	local b = p:FindFirstChild("Backpack")
+	if b then for _, t in ipairs(b:GetChildren()) do if t:IsA("Tool") then return t.Name end end end
+	return "-"
+end
+
+local function equipTool(name)
+	local c, hum = charParts()
+	if not (c and hum) then return end
+	local t = c:FindFirstChild(name)
+	if t then return t end
+	local bp = plr:FindFirstChild("Backpack")
+	local inBp = bp and bp:FindFirstChild(name)
+	if inBp then hum:EquipTool(inBp) return inBp end
+end
+
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+local function isVisible(part, targetChar)
+	rayParams.FilterDescendantsInstances = {plr.Character, targetChar}
+	local o = cam.CFrame.Position
+	return workspace:Raycast(o, part.Position - o, rayParams) == nil
+end
+
+-- ================= екранні шари =================
+local pg = plr:WaitForChild("PlayerGui")
+local gui = new("ScreenGui", {Name = "FakeHub", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 10}, pg)
+local espGui = new("ScreenGui", {Name = "FakeHubESP", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 1}, pg)
+
+-- сповіщення
+local toastBox = new("Frame", {AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -20),
+	Size = UDim2.fromOffset(300, 200), BackgroundTransparency = 1}, gui)
+new("UIListLayout", {VerticalAlignment = Enum.VerticalAlignment.Bottom, Padding = UDim.new(0, 4),
+	HorizontalAlignment = Enum.HorizontalAlignment.Center}, toastBox)
+local function notify(text)
+	if not C.notify then return end
+	local l = new("TextLabel", {Size = UDim2.fromOffset(280, 26), BackgroundColor3 = MID, Text = text,
+		TextColor3 = WHITE, Font = Enum.Font.GothamBold, TextSize = 12}, toastBox)
+	corner(l, 8)
+	task.delay(2, function()
+		TweenService:Create(l, TweenInfo.new(0.4), {TextTransparency = 1, BackgroundTransparency = 1}):Play()
+		task.wait(0.45)
+		l:Destroy()
+	end)
+end
+
+-- FOV коло
+local circle = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+	BackgroundTransparency = 1, Visible = false}, espGui)
+corner(circle, 1000)
+local circleStroke = new("UIStroke", {Thickness = 2}, circle)
+
+-- прев'ю хітбокса
+local previewAdorn = new("BoxHandleAdornment", {Size = Vector3.new(2.2, 2.2, 2.2), AlwaysOnTop = true,
+	ZIndex = 5, Transparency = 0.5, Color3 = COLORS.Red, Visible = false}, espGui)
+
+-- радар
+local radar = new("Frame", {AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 12, 1, -12),
+	BackgroundColor3 = DARK, BackgroundTransparency = 0.25, Visible = false}, espGui)
+local radarCorner = corner(radar, 1000)
+new("UIStroke", {Color = LIGHT, Thickness = 2}, radar)
+local radarSelf = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(6, 6),
+	BackgroundColor3 = WHITE}, radar)
+corner(radarSelf, 3)
+
+-- музика
+local music = new("Sound", {Name = "FHMusic", Volume = 1}, gui)
+local fxReverb = new("ReverbSoundEffect", {Enabled = false}, music)
+local fxEcho = new("EchoSoundEffect", {Enabled = false}, music)
+local fxDist = new("DistortionSoundEffect", {Enabled = false, Level = 0.5}, music)
+
+-- ================= ESP-об'єкти =================
+local espObjs = {}
+local function newLine()
+	return new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, Visible = false}, espGui)
+end
+local function setLine(f, a, b, thick, col, alpha)
+	local d = b - a
+	f.Size = UDim2.fromOffset(d.Magnitude, thick)
+	f.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
+	f.Rotation = math.deg(math.atan2(d.Y, d.X))
+	f.BackgroundColor3 = col
+	f.BackgroundTransparency = alpha
+	f.Visible = true
+end
+local function mkObjs(p)
+	local o = {}
+	o.tracer = newLine()
+	o.box = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false}, espGui)
+	o.boxStroke = new("UIStroke", {}, o.box)
+	o.head = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false}, espGui)
+	corner(o.head, 1000)
+	o.headStroke = new("UIStroke", {}, o.head)
+	o.text = new("TextLabel", {AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(260, 16),
+		BackgroundTransparency = 1, Visible = false}, espGui)
+	o.skel = {}
+	for i = 1, 14 do o.skel[i] = newLine() end
+	o.dot = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(6, 6), Visible = false}, radar)
+	corner(o.dot, 3)
+	espObjs[p] = o
+	return o
+end
+local function hideObjs(o)
+	o.tracer.Visible = false
+	o.box.Visible = false
+	o.head.Visible = false
+	o.text.Visible = false
+	for _, f in ipairs(o.skel) do f.Visible = false end
+end
+Players.PlayerRemoving:Connect(function(p)
+	local o = espObjs[p]
+	if o then
+		for _, k in ipairs({"tracer", "box", "head", "text", "dot"}) do o[k]:Destroy() end
+		for _, f in ipairs(o.skel) do f:Destroy() end
+		espObjs[p] = nil
+	end
+end)
+
+local R15 = {{"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"}, {"UpperTorso", "LeftUpperArm"},
+	{"LeftUpperArm", "LeftLowerArm"}, {"LeftLowerArm", "LeftHand"}, {"UpperTorso", "RightUpperArm"},
+	{"RightUpperArm", "RightLowerArm"}, {"RightLowerArm", "RightHand"}, {"LowerTorso", "LeftUpperLeg"},
+	{"LeftUpperLeg", "LeftLowerLeg"}, {"LeftLowerLeg", "LeftFoot"}, {"LowerTorso", "RightUpperLeg"},
+	{"RightUpperLeg", "RightLowerLeg"}, {"RightLowerLeg", "RightFoot"}}
+local R6 = {{"Head", "Torso"}, {"Torso", "Left Arm"}, {"Torso", "Right Arm"}, {"Torso", "Left Leg"}, {"Torso", "Right Leg"}}
+
+local function updatePlayerESP(p, o, myRoot, rainbow)
+	local c, h, r = charParts(p)
+	local hl = c and c:FindFirstChild("FHHighlight")
+	if not (C.esp and c and h and r and h.Health > 0) then
+		hideObjs(o)
+		if hl then hl:Destroy() end
+		return
+	end
+	local dist = (r.Position - myRoot.Position).Magnitude
+	if dist > C.espDist then
+		hideObjs(o)
+		if hl then hl:Destroy() end
+		return
+	end
+	local role = roleOf(p)
+	local col = C.rainbow and rainbow or (COLORS[C[ROLEKEY[role]]] or WHITE)
+	if C.visCheck and not isVisible(r, c) then col = col:Lerp(Color3.new(0, 0, 0), 0.5) end
+	local alpha = C.espAlpha / 100
+
+	if C.chams then
+		if not hl then
+			hl = new("Highlight", {Name = "FHHighlight", DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, FillTransparency = 0.5}, c)
+		end
+		hl.FillColor = col
+		hl.OutlineColor = col
+	elseif hl then
+		hl:Destroy()
+	end
+
+	local rp, on = cam:WorldToViewportPoint(r.Position)
+	if not on then hideObjs(o) return end
+	local top = cam:WorldToViewportPoint(r.Position + Vector3.new(0, 3, 0))
+	local bot = cam:WorldToViewportPoint(r.Position - Vector3.new(0, 3.2, 0))
+	local hgt = math.abs(bot.Y - top.Y)
+	local wid = hgt * 0.55
+	local thick = C.lineThick
+
+	if C.box then
+		o.box.Visible = true
+		o.box.Position = UDim2.fromOffset(rp.X, (top.Y + bot.Y) / 2)
+		o.box.Size = UDim2.fromOffset(wid, hgt)
+		o.boxStroke.Color = col
+		o.boxStroke.Thickness = thick
+		o.boxStroke.Transparency = alpha
+	else
+		o.box.Visible = false
+	end
+
+	if C.tracers then
+		setLine(o.tracer, Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y), Vector2.new(rp.X, bot.Y), thick, col, alpha)
+	else
+		o.tracer.Visible = false
+	end
+
+	local head = c:FindFirstChild("Head")
+	if C.headCircle and head then
+		local hp = cam:WorldToViewportPoint(head.Position)
+		local rad = math.max(4, hgt * 0.09)
+		o.head.Visible = true
+		o.head.Position = UDim2.fromOffset(hp.X, hp.Y)
+		o.head.Size = UDim2.fromOffset(rad * 2, rad * 2)
+		o.headStroke.Color = col
+		o.headStroke.Thickness = thick
+		o.headStroke.Transparency = alpha
+	else
+		o.head.Visible = false
+	end
+
+	local used = 0
+	if C.skeleton and not C.lowPerf then
+		local list = (h.RigType == Enum.HumanoidRigType.R15) and R15 or R6
+		for i, pair in ipairs(list) do
+			local pa, pb = c:FindFirstChild(pair[1]), c:FindFirstChild(pair[2])
+			if pa and pb then
+				local a, aOn = cam:WorldToViewportPoint(pa.Position)
+				local b, bOn = cam:WorldToViewportPoint(pb.Position)
+				if aOn and bOn then
+					setLine(o.skel[i], Vector2.new(a.X, a.Y), Vector2.new(b.X, b.Y), thick, col, alpha)
+					used = i
+				else
+					o.skel[i].Visible = false
+				end
+			else
+				o.skel[i].Visible = false
+			end
+		end
+	end
+	for i = used + 1, 14 do o.skel[i].Visible = false end
+
+	local parts = {}
+	if C.names then table.insert(parts, p.Name) end
+	if C.roles then table.insert(parts, "[" .. role .. "]") end
+	if C.weapons then table.insert(parts, weaponOf(p)) end
+	if C.health then table.insert(parts, math.floor(h.Health) .. "hp") end
+	if C.dist then table.insert(parts, math.floor(dist) .. "m") end
+	if #parts > 0 then
+		o.text.Visible = true
+		o.text.Text = table.concat(parts, " | ")
+		o.text.Position = UDim2.fromOffset(rp.X, top.Y - 2)
+		o.text.TextColor3 = col
+		o.text.TextSize = C.textSize
+		o.text.Font = Enum.Font[C.espFont] or Enum.Font.GothamBold
+		o.text.TextStrokeTransparency = C.textStroke and 0.2 or 1
+		o.text.TextTransparency = alpha
+	else
+		o.text.Visible = false
+	end
+end
+
+local function updateRadar(myRoot, rainbow)
+	radar.Visible = C.radar
+	if not C.radar then return end
+	local size = C.radarSize
+	radar.Size = UDim2.fromOffset(size, size)
+	radarCorner.CornerRadius = UDim.new(C.radarShape == "Circle" and 1 or 0, 0)
+	local R = size / 2
+	radarSelf.Position = UDim2.fromOffset(R, R)
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= plr then
+			local o = espObjs[p] or mkObjs(p)
+			local c, h, r = charParts(p)
+			if c and h and r and h.Health > 0 and myRoot then
+				local rel = cam.CFrame:VectorToObjectSpace(r.Position - myRoot.Position)
+				local v = Vector2.new(rel.X, rel.Z) / C.radarRange * R
+				if C.radarShape == "Circle" then
+					if v.Magnitude > R - 4 then v = v.Unit * (R - 4) end
+				else
+					v = Vector2.new(math.clamp(v.X, -(R - 4), R - 4), math.clamp(v.Y, -(R - 4), R - 4))
+				end
+				o.dot.Position = UDim2.fromOffset(R + v.X, R + v.Y)
+				o.dot.BackgroundColor3 = C.rainbow and rainbow or (COLORS[C[ROLEKEY[roleOf(p)]]] or WHITE)
+				o.dot.Visible = true
+			else
+				o.dot.Visible = false
+			end
+		end
+	end
+end
+
+-- ================= бойова логіка =================
+local T = {shoot = 0, stab = 0, throw = 0}
+
+local function getTarget(ignoreFov)
+	local bestPos, bestP, bestPart, bd = nil, nil, nil, ignoreFov and math.huge or C.fov
+	local _, _, myRoot = charParts()
+	if not myRoot then return end
+	local center = cam.ViewportSize / 2
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= plr then
+			local c, h, r = charParts(p)
+			if c and h and r and h.Health > 0 and (C.aimTarget == "Everyone" or roleOf(p) == "Murderer") then
+				local part = c:FindFirstChild(C.aimPart) or c:FindFirstChild("Head") or r
+				if part and (part.Position - myRoot.Position).Magnitude <= C.maxDist then
+					local pos = part.Position
+					if C.predict then pos = pos + r.AssemblyLinearVelocity * 0.1 end
+					local v, on = cam:WorldToViewportPoint(pos)
+					if on then
+						local d = (Vector2.new(v.X, v.Y) - center).Magnitude
+						if d < bd and (not C.visAim or isVisible(part, c)) then
+							bestPos, bestP, bestPart, bd = pos, p, part, d
+						end
+					end
+				end
+			end
+		end
+	end
+	return bestPos, bestP, bestPart, bd
+end
+
+local function nearest(range, needVisible)
+	local _, _, myRoot = charParts()
+	if not myRoot then return end
+	local best, bd, bp = nil, range, nil
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= plr then
+			local c, h, r = charParts(p)
+			if c and h and r and h.Health > 0 then
+				local d = (r.Position - myRoot.Position).Magnitude
+				if d < bd and (not needVisible or isVisible(r, c)) then best, bd, bp = r, d, p end
+			end
+		end
+	end
+	return best, bp
+end
+
+function A.shoot()
+	local gun = equipTool(GUN_NAME)
+	if gun then gun:Activate() end
+end
+function A.fire()
+	local pos = getTarget(true)
+	if pos then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, pos) end
+	A.shoot()
+end
+function A.stab()
+	local _, _, root = charParts()
+	if not root then return end
+	local knife = equipTool(KNIFE_NAME)
+	if not knife then return end
+	local r = nearest(C.stabTp and C.tpRange or C.stabRange)
+	if r then
+		if C.stabTp and (r.Position - root.Position).Magnitude > C.stabRange then
+			root.CFrame = r.CFrame * CFrame.new(0, 0, 2.5)
+		end
+		if C.faceTarget then
+			root.CFrame = CFrame.lookAt(root.Position, Vector3.new(r.Position.X, root.Position.Y, r.Position.Z))
+		end
+	end
+	knife:Activate()
+end
+function A.throw()
+	local r = nearest(C.throwRange, true)
+	if not r then return end
+	local knife = equipTool(KNIFE_NAME)
+	if not knife then return end
+	cam.CFrame = CFrame.lookAt(cam.CFrame.Position, r.Position)
+	knife:Activate()
+end
+function A.toggleFly() C.fly = not C.fly if reg.fly then reg.fly() end end
+function A.toggleNoclip() C.noclip = not C.noclip if reg.noclip then reg.noclip() end end
+
+-- ================= мобільні кнопки =================
+local mobBtns = {}
+local function addMobBtn(txt, fn, showFn)
+	local b = new("TextButton", {AnchorPoint = Vector2.new(0.5, 0.5), Text = txt, TextColor3 = WHITE,
+		Font = Enum.Font.GothamBold, TextSize = 13, BackgroundTransparency = 0.2, Visible = false}, gui)
+	corner(b, 1000)
+	themed(function() b.BackgroundColor3 = accent() end)
+	b.Activated:Connect(function() local ok, e = pcall(fn) if not ok then warn("[FakeHub] " .. tostring(e)) end end)
+	table.insert(mobBtns, {btn = b, show = showFn})
+end
+addMobBtn("FIRE", A.fire, function() return C.fireButton or C.mobileUI end)
+addMobBtn("STAB", A.stab, function() return C.mobileUI end)
+addMobBtn("THROW", A.throw, function() return C.throwButton or C.mobileUI end)
+addMobBtn("FLY", A.toggleFly, function() return C.mobileUI end)
+addMobBtn("NOCLIP", A.toggleNoclip, function() return C.mobileUI end)
+local function layoutMobile()
+	local k = 0
+	for _, m in ipairs(mobBtns) do
+		if m.show() then
+			m.btn.Visible = true
+			m.btn.Size = UDim2.fromOffset(C.btnSize, C.btnSize)
+			m.btn.Position = UDim2.new(C.btnX / 100, 0, C.btnY / 100, k * (C.btnSize + 8))
+			k += 1
+		else
+			m.btn.Visible = false
+		end
+	end
+end
+
+-- ================= телепорт, ферма, анімації, музика, чат =================
+local lastPos
+local saved = {}
+local function tpCF(cf)
+	local _, _, r = charParts()
+	if r then lastPos = r.CFrame r.CFrame = cf end
+end
+local function tpToRole(role)
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= plr and roleOf(p) == role then
+			local _, _, tr = charParts(p)
+			if tr then tpCF(tr.CFrame * CFrame.new(0, 0, 4)) return end
+		end
+	end
+	notify("Не знайдено: " .. role)
+end
+local function playerNames()
+	local t = {}
+	for _, p in ipairs(Players:GetPlayers()) do if p ~= plr then table.insert(t, p.Name) end end
+	return t
+end
+local mapLocs = {}
+local function scanLocations()
+	mapLocs = {}
+	local names, n = {}, 0
+	for _, d in ipairs(workspace:GetDescendants()) do
+		if n >= 30 then break end
+		if d:IsA("SpawnLocation") then
+			n += 1
+			local nm = d.Name .. "#" .. n
+			mapLocs[nm] = d.CFrame * CFrame.new(0, 4, 0)
+			table.insert(names, nm)
+		elseif d:IsA("Model") and d ~= plr.Character then
+			local l = d.Name:lower()
+			if (l:find("lobby") or l:find("spawn")) and not Players:GetPlayerFromCharacter(d) then
+				n += 1
+				local nm = d.Name .. "#" .. n
+				mapLocs[nm] = d:GetPivot() * CFrame.new(0, 5, 0)
+				table.insert(names, nm)
+			end
+		end
+	end
+	return names
+end
+local function savedNames()
+	local t = {}
+	for k in pairs(saved) do table.insert(t, k) end
+	table.sort(t)
+	return t
+end
+
+local function collect(name, flagKey)
+	local _, _, root = charParts()
+	if not root then return 0 end
+	local back = root.CFrame
+	local n = 0
+	for _, d in ipairs(workspace:GetDescendants()) do
+		if d:IsA("BasePart") and d.Name == name and d.Parent then
+			if not root.Parent or not C[flagKey] then break end
+			root.CFrame = d.CFrame
+			task.wait(0.12)
+			n += 1
+			if n >= C.farmMax then break end
+		end
+	end
+	if root.Parent then root.CFrame = back end
+	return n
+end
+
+local track
+local favs, songs = {}, {}
+local EMOTES = {Wave = 507770239, Point = 507770453, Cheer = 507770677, Laugh = 507770818,
+	Dance = 507771019, Dance2 = 507776043, Dance3 = 507777268}
+local EMOTE_NAMES = {"Wave", "Point", "Cheer", "Laugh", "Dance", "Dance2", "Dance3"}
+local function playAnim(id)
+	local _, hum = charParts()
+	if not hum then return end
+	id = tostring(id or ""):gsub("%D", "")
+	if id == "" then notify("Введи ID анімації") return end
+	local animator = hum:FindFirstChildOfClass("Animator") or new("Animator", {}, hum)
+	if track then track:Stop() end
+	local a = new("Animation", {AnimationId = "rbxassetid://" .. id}, nil)
+	track = animator:LoadAnimation(a)
+	track.Priority = Enum.AnimationPriority.Action
+	track:Play()
+	track:AdjustSpeed(C.animSpeed / 10)
+end
+
+function A.musicApply()
+	music.Volume = C.volume / 5
+	music.PlaybackSpeed = C.pitch / 10
+	music.Looped = C.loop
+	fxReverb.Enabled = C.reverb
+	fxEcho.Enabled = C.echo
+	fxDist.Enabled = C.distortion
+	local c = plr.Character
+	local head = c and c:FindFirstChild("Head")
+	music.Parent = (C.boombox and head) or gui
+end
+local function playMusic(id)
+	id = tostring(id or ""):gsub("%D", "")
+	if id == "" then notify("Введи ID музики") return end
+	A.musicApply()
+	music.SoundId = "rbxassetid://" .. id
+	music:Play()
+end
+
+local function sendChat(msg)
+	if not msg or msg == "" then return end
+	local ok = pcall(function()
+		if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+			TextChatService.TextChannels.RBXGeneral:SendAsync(msg)
+		else
+			game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg, "All")
+		end
+	end)
+	if not ok then notify("Чат недоступний в цій грі") end
+end
+
+-- ================= конфіги =================
+local PRESETS = {
+	Legit = {aim = true, fov = 90, smooth = 15, autoShoot = false, esp = true, box = false, chams = true, visAim = true},
+	Rage = {aim = true, fov = 450, smooth = 100, autoShoot = true, shootDelay = 3, stab = true, stabTp = true,
+		esp = true, box = true, tracers = true, speed = 40},
+	Visuals = {esp = true, box = true, names = true, roles = true, tracers = true, skeleton = true, chams = true, radar = true},
+}
+local PRESET_NAMES = {"Legit", "Rage", "Visuals"}
+local configs = {}
+
+local function applyUI() end -- перевизначається нижче
+local function applyConfig(tbl)
+	for k, v in pairs(tbl) do
+		if DEFAULTS[k] ~= nil and type(v) == type(DEFAULTS[k]) then
+			C[k] = v
+			if reg[k] then reg[k]() end
+		end
+	end
+	applyUI()
+end
+local function resetKeys(keys)
+	local t = {}
+	for _, k in ipairs(keys) do t[k] = DEFAULTS[k] end
+	applyConfig(t)
+end
+local function copyC()
+	local t = {}
+	for k, v in pairs(C) do t[k] = v end
+	return t
+end
+
+-- ================= меню =================
+local W, H = 620, 410
+local main = new("CanvasGroup", {Size = UDim2.fromOffset(W, H), Position = UDim2.new(0.5, -W / 2, 0.5, -H / 2),
+	BackgroundColor3 = DARK}, gui)
+corner(main, 10)
+local uiScale = new("UIScale", {Scale = 1}, main)
+local menuOpen = true
+
+local bar = new("Frame", {Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = MID}, main)
+local titleLbl = new("TextLabel", {Size = UDim2.fromOffset(100, 34), Position = UDim2.fromOffset(10, 0),
+	BackgroundTransparency = 1, Text = "Fake Hub", Font = Enum.Font.GothamBold, TextSize = 16,
+	TextXAlignment = Enum.TextXAlignment.Left}, bar)
+themed(function() titleLbl.TextColor3 = accent() end)
+local searchBox = new("TextBox", {Size = UDim2.new(1, -230, 0, 22), Position = UDim2.fromOffset(112, 6),
+	BackgroundColor3 = LIGHT, PlaceholderText = "Пошук функцій...", Text = "", TextColor3 = WHITE,
+	Font = Enum.Font.Gotham, TextSize = 12, ClearTextOnFocus = false}, bar)
+corner(searchBox, 6)
+local collapseBtn = new("TextButton", {Size = UDim2.fromOffset(26, 24), Position = UDim2.new(1, -62, 0, 5),
+	BackgroundColor3 = LIGHT, Text = "-", TextColor3 = WHITE, Font = Enum.Font.GothamBold, TextSize = 14}, bar)
+corner(collapseBtn, 6)
+local closeBtn = new("TextButton", {Size = UDim2.fromOffset(26, 24), Position = UDim2.new(1, -32, 0, 5),
+	BackgroundColor3 = Color3.fromRGB(200, 60, 60), Text = "X", TextColor3 = WHITE, Font = Enum.Font.GothamBold,
+	TextSize = 12}, bar)
+corner(closeBtn, 6)
+
+local body = new("Frame", {Position = UDim2.fromOffset(0, 38), Size = UDim2.new(1, 0, 1, -38), BackgroundTransparency = 1}, main)
+local side = new("ScrollingFrame", {Position = UDim2.fromOffset(6, 0), Size = UDim2.new(0, 96, 1, -6),
+	BackgroundColor3 = MID, ScrollBarThickness = 3, AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	CanvasSize = UDim2.new(), BorderSizePixel = 0}, body)
+corner(side, 8)
+new("UIListLayout", {Padding = UDim.new(0, 4)}, side)
+new("UIPadding", {PaddingTop = UDim.new(0, 4), PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4)}, side)
+
+-- перетягування
+local dragging, dragStart, startPos
+bar.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+		dragging, dragStart, startPos = true, i.Position, main.Position
+	end
+end)
+UIS.InputChanged:Connect(function(i)
+	if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+		local d = i.Position - dragStart
+		main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+	end
+end)
+UIS.InputEnded:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+	end
+end)
+
+-- сторінки
+local pages, allItems, order = {}, {}, 0
+local currentPage, lastPage = "Sheriff", "Sheriff"
+
+local function showPage(name)
+	currentPage = name
+	if name ~= "Search" then lastPage = name end
+	for n, o in pairs(pages) do
+		o.page.Visible = (n == name)
+		if o.btn then o.btn.BackgroundColor3 = (n == name) and accent() or LIGHT end
+	end
+end
+themed(function() showPage(currentPage) end)
+
+local function newPage(name, noButton)
+	local p = new("ScrollingFrame", {Position = UDim2.fromOffset(108, 0), Size = UDim2.new(1, -114, 1, -6),
+		BackgroundTransparency = 1, ScrollBarThickness = 4, AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		CanvasSize = UDim2.new(), Visible = false, BorderSizePixel = 0}, body)
+	p:SetAttribute("tab", name)
+	new("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder}, p)
+	local b
+	if not noButton then
+		b = new("TextButton", {Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = LIGHT, Text = name, TextColor3 = WHITE,
+			Font = Enum.Font.GothamBold, TextSize = 12}, side)
+		corner(b, 6)
+		b.Activated:Connect(function() showPage(name) end)
+	end
+	pages[name] = {page = p, btn = b}
+	return p
+end
+
+local function item(page, h, name)
+	order += 1
+	local f = new("Frame", {Name = name or "item", Size = UDim2.new(1, -8, 0, h), BackgroundColor3 = MID,
+		LayoutOrder = order, ClipsDescendants = true}, page)
+	corner(f, 8)
+	if name then table.insert(allItems, {name = name, tab = page:GetAttribute("tab")}) end
+	return f
+end
+
+local function label(parent, text, y, h)
+	return new("TextLabel", {Size = UDim2.new(1, -16, 0, h or 18), Position = UDim2.new(0, 8, 0, y or 0),
+		BackgroundTransparency = 1, Text = text, TextColor3 = WHITE, Font = Enum.Font.Gotham, TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true}, parent)
+end
+
+local function slider(page, name, min, max, key, cb)
+	local f = item(page, 44, name)
+	local lbl = label(f, "", 4)
+	local track = new("Frame", {Size = UDim2.new(1, -16, 0, 10), Position = UDim2.new(0, 8, 0, 27), BackgroundColor3 = LIGHT}, f)
+	corner(track, 5)
+	local fill = new("Frame", {Size = UDim2.new(0, 0, 1, 0)}, track)
+	corner(fill, 5)
+	themed(function() fill.BackgroundColor3 = accent() end)
+	local function refresh()
+		lbl.Text = name .. ": " .. tostring(C[key])
+		fill.Size = UDim2.new(math.clamp((C[key] - min) / (max - min), 0, 1), 0, 1, 0)
+	end
+	reg[key] = refresh
+	refresh()
+	local active = false
+	local function update(x)
+		local r = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+		C[key] = math.floor(min + (max - min) * r + 0.5)
+		refresh()
+		if cb then cb(C[key]) end
+	end
+	track.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			active = true
+			update(i.Position.X)
+		end
+	end)
+	UIS.InputChanged:Connect(function(i)
+		if active and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			update(i.Position.X)
+		end
+	end)
+	UIS.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			active = false
+		end
+	end)
+end
+
+local function toggle(page, name, key, cb)
+	local f = item(page, 32, name)
+	local b = new("TextButton", {Size = UDim2.new(1, 0, 1, 0), TextColor3 = WHITE, Font = Enum.Font.GothamBold, TextSize = 12}, f)
+	corner(b, 8)
+	local function refresh()
+		b.Text = name .. (C[key] and ": так" or ": ні")
+		b.BackgroundColor3 = C[key] and accent() or LIGHT
+	end
+	reg[key] = refresh
+	themed(refresh)
+	b.Activated:Connect(function()
+		C[key] = not C[key]
+		refresh()
+		if cb then cb(C[key]) end
+	end)
+end
+
+local function button(page, name, fn)
+	local f = item(page, 32, name)
+	local b = new("TextButton", {Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = LIGHT, Text = name, TextColor3 = WHITE,
+		Font = Enum.Font.GothamBold, TextSize = 12}, f)
+	corner(b, 8)
+	b.Activated:Connect(function()
+		local ok, e = pcall(fn)
+		if not ok then warn("[FakeHub] " .. tostring(e)) notify("Помилка, дивись Output") end
+	end)
+end
+
+local function dropdown(page, name, key, options, cb)
+	local f = item(page, 32, name)
+	local top = new("TextButton", {Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = LIGHT, TextColor3 = WHITE,
+		Font = Enum.Font.GothamBold, TextSize = 12}, f)
+	corner(top, 8)
+	local list = new("Frame", {Position = UDim2.fromOffset(4, 36), Size = UDim2.new(1, -8, 0, 0), BackgroundTransparency = 1,
+		Visible = false, AutomaticSize = Enum.AutomaticSize.Y}, f)
+	new("UIListLayout", {Padding = UDim.new(0, 3)}, list)
+	local open = false
+	local function refresh() top.Text = name .. ": " .. tostring(C[key] ~= "" and C[key] or "-") .. "  v" end
+	reg[key] = refresh
+	refresh()
+	local function close()
+		open = false
+		list.Visible = false
+		f.Size = UDim2.new(1, -8, 0, 32)
+	end
+	top.Activated:Connect(function()
+		if open then close() return end
+		for _, c in ipairs(list:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+		local opts = type(options) == "function" and options() or options
+		for _, o in ipairs(opts) do
+			local b = new("TextButton", {Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = LIGHT, Text = tostring(o),
+				TextColor3 = WHITE, Font = Enum.Font.Gotham, TextSize = 12}, list)
+			corner(b, 6)
+			b.Activated:Connect(function()
+				C[key] = o
+				refresh()
+				close()
+				if cb then cb(o) end
+			end)
+		end
+		open = true
+		list.Visible = true
+		f.Size = UDim2.new(1, -8, 0, 40 + #opts * 27)
+	end)
+end
+
+local function textbox(page, name, key, placeholder)
+	local f = item(page, 50, name)
+	label(f, name, 3)
+	local tb = new("TextBox", {Size = UDim2.new(1, -16, 0, 22), Position = UDim2.new(0, 8, 0, 22), BackgroundColor3 = LIGHT,
+		Text = key and tostring(C[key]) or "", PlaceholderText = placeholder or "", TextColor3 = WHITE, Font = Enum.Font.Gotham,
+		TextSize = 12, ClearTextOnFocus = false}, f)
+	corner(tb, 6)
+	if key then
+		tb.FocusLost:Connect(function() C[key] = tb.Text end)
+		reg[key] = function() tb.Text = tostring(C[key]) end
+	end
+	return tb
+end
+
+local function infoLabel(page, h)
+	local f = item(page, h)
+	return label(f, "", 4, h - 8), f
+end
+
+-- ----- Sheriff -----
+local pSheriff = newPage("Sheriff")
+toggle(pSheriff, "AimBot", "aim")
+dropdown(pSheriff, "Ціль", "aimTarget", {"Murderer", "Everyone"})
+dropdown(pSheriff, "Aim Part", "aimPart", {"Head", "HumanoidRootPart", "UpperTorso", "Torso"})
+slider(pSheriff, "AimBot FOV", 30, 600, "fov")
+slider(pSheriff, "Плавність аіму (100 = миттєво)", 3, 100, "smooth")
+toggle(pSheriff, "FOV Circle", "fovCircle")
+dropdown(pSheriff, "FOV Color", "fovColor", COLOR_NAMES)
+slider(pSheriff, "Auto Distance (макс. дальність)", 50, 2000, "maxDist")
+toggle(pSheriff, "Visibility Check (не цілити крізь стіни)", "visAim")
+toggle(pSheriff, "Prediction (упередження руху)", "predict")
+toggle(pSheriff, "Auto Shoot", "autoShoot")
+slider(pSheriff, "Затримка пострілу (x0.1 с)", 1, 30, "shootDelay")
+toggle(pSheriff, "Fire Button (кнопка на екрані)", "fireButton", function() layoutMobile() end)
+toggle(pSheriff, "Hitbox Preview", "hitPreview")
+
+-- ----- Murderer -----
+local pMurder = newPage("Murderer")
+toggle(pMurder, "Auto Stab", "stab")
+slider(pMurder, "Knife Range", 4, 40, "stabRange")
+slider(pMurder, "Затримка удару (x0.1 с)", 1, 20, "stabDelay")
+toggle(pMurder, "Повертатись до цілі", "faceTarget")
+toggle(pMurder, "Stab Teleport (телепорт до цілі)", "stabTp")
+slider(pMurder, "Teleport Range", 10, 150, "tpRange")
+toggle(pMurder, "Auto Throw", "autoThrow")
+slider(pMurder, "Throw Range", 15, 200, "throwRange")
+slider(pMurder, "Затримка кидка (x0.1 с)", 5, 40, "throwDelay")
+toggle(pMurder, "Throw Button (кнопка на екрані)", "throwButton", function() layoutMobile() end)
+
+-- ----- Visuals -----
+local pVis = newPage("Visuals")
+toggle(pVis, "ESP (головний вмикач)", "esp")
+toggle(pVis, "Chams (підсвітка тіла)", "chams")
+toggle(pVis, "Box ESP", "box")
+toggle(pVis, "Name ESP", "names")
+toggle(pVis, "Role ESP", "roles")
+toggle(pVis, "Weapon ESP", "weapons")
+toggle(pVis, "Distance ESP", "dist")
+toggle(pVis, "Health ESP", "health")
+toggle(pVis, "Tracers", "tracers")
+toggle(pVis, "Head Circle", "headCircle")
+toggle(pVis, "Skeleton", "skeleton")
+toggle(pVis, "Visibility Check (темніші за стіною)", "visCheck")
+slider(pVis, "Marker Distance (макс. дальність)", 50, 3000, "espDist")
+toggle(pVis, "Radar / Minimap", "radar")
+dropdown(pVis, "Radar Shape", "radarShape", {"Circle", "Square"})
+slider(pVis, "Radar Size", 80, 300, "radarSize")
+slider(pVis, "Radar Range", 40, 600, "radarRange")
+dropdown(pVis, "ESP Preset", "espPreset", {"Default", "Neon", "Mono"}, function(v)
+	local t = {Default = {"Red", "Blue", "Green"}, Neon = {"Pink", "Cyan", "Yellow"}, Mono = {"White", "White", "White"}}
+	applyConfig({colMurd = t[v][1], colSher = t[v][2], colInno = t[v][3]})
+end)
+dropdown(pVis, "Колір вбивці", "colMurd", COLOR_NAMES)
+dropdown(pVis, "Колір шерифа", "colSher", COLOR_NAMES)
+dropdown(pVis, "Колір невинних", "colInno", COLOR_NAMES)
+toggle(pVis, "Rainbow (плавна зміна кольору)", "rainbow")
+slider(pVis, "Прозорість ліній (%)", 0, 90, "espAlpha")
+slider(pVis, "Товщина ліній", 1, 5, "lineThick")
+slider(pVis, "Розмір тексту", 8, 24, "textSize")
+dropdown(pVis, "Шрифт", "espFont", FONT_NAMES)
+toggle(pVis, "Обводка тексту", "textStroke")
+
+-- ----- Player -----
+local pPlayer = newPage("Player")
+slider(pPlayer, "Walk Speed", 16, 200, "speed")
+slider(pPlayer, "Jump Power", 50, 300, "jump")
+toggle(pPlayer, "High Jump (x2 стрибок)", "highJump")
+toggle(pPlayer, "Fly", "fly")
+slider(pPlayer, "Fly Speed", 20, 200, "flySpeed")
+toggle(pPlayer, "Noclip", "noclip")
+toggle(pPlayer, "Invisibility (напівпрозорий, локально)", "ghost")
+toggle(pPlayer, "Spin", "spin")
+dropdown(pPlayer, "Spin Mode", "spinMode", {"Left", "Right", "Jitter"})
+slider(pPlayer, "Spin Speed", 1, 40, "spinSpeed")
+toggle(pPlayer, "Bhop (тримай пробіл)", "bhop")
+slider(pPlayer, "Bhop Power", 30, 120, "bhopPower")
+toggle(pPlayer, "Wall Hop", "wallHop")
+toggle(pPlayer, "Infinite Jump", "infJump")
+slider(pPlayer, "Gravity", 20, 400, "gravity")
+slider(pPlayer, "Camera FOV", 40, 120, "fovCam")
+button(pPlayer, "Reset Settings (вкладка Player)", function()
+	resetKeys({"speed", "jump", "highJump", "fly", "flySpeed", "noclip", "ghost", "spin", "spinMode", "spinSpeed",
+		"bhop", "bhopPower", "wallHop", "infJump", "gravity", "fovCam"})
+end)
+
+-- ----- Teleport -----
+local pTp = newPage("Teleport")
+button(pTp, "Return Position (назад)", function()
+	local _, _, r = charParts()
+	if r and lastPos then local cur = r.CFrame r.CFrame = lastPos lastPos = cur end
+end)
+button(pTp, "ТП до вбивці", function() tpToRole("Murderer") end)
+button(pTp, "ТП до шерифа", function() tpToRole("Sheriff") end)
+dropdown(pTp, "Гравець", "tpPlayer", playerNames)
+button(pTp, "ТП до вибраного гравця", function()
+	local p = Players:FindFirstChild(C.tpPlayer)
+	local _, _, tr = charParts(p)
+	if tr then tpCF(tr.CFrame * CFrame.new(0, 0, 4)) else notify("Гравця немає") end
+end)
+dropdown(pTp, "Map Locations", "mapLoc", scanLocations)
+button(pTp, "ТП на локацію", function()
+	local cf = mapLocs[C.mapLoc]
+	if cf then tpCF(cf) else notify("Спочатку вибери локацію") end
+end)
+textbox(pTp, "Custom X", "cx")
+textbox(pTp, "Custom Y", "cy")
+textbox(pTp, "Custom Z", "cz")
+button(pTp, "ТП на координати", function()
+	local x, y, z = tonumber(C.cx), tonumber(C.cy), tonumber(C.cz)
+	if x and y and z then tpCF(CFrame.new(x, y, z)) else notify("Невірні координати") end
+end)
+textbox(pTp, "Назва позиції", "posName")
+button(pTp, "Зберегти поточну позицію", function()
+	local _, _, r = charParts()
+	if r and C.posName ~= "" then saved[C.posName] = r.CFrame notify("Збережено: " .. C.posName) end
+end)
+dropdown(pTp, "Saved Positions", "savedPos", savedNames)
+button(pTp, "ТП на збережену", function()
+	local cf = saved[C.savedPos]
+	if cf then tpCF(cf) else notify("Вибери збережену позицію") end
+end)
+button(pTp, "Видалити збережену", function()
+	saved[C.savedPos] = nil
+	C.savedPos = ""
+	reg.savedPos()
+end)
+
+-- ----- Farm -----
+local pFarm = newPage("Farm")
+toggle(pFarm, "Auto Farm (монети)", "farm")
+textbox(pFarm, "Назва монети в грі", "coinName")
+toggle(pFarm, "Collect Items (предмети)", "collectItems")
+textbox(pFarm, "Назва предмета в грі", "itemName")
+slider(pFarm, "Collection Interval (с)", 1, 20, "farmInterval")
+slider(pFarm, "Макс. за цикл", 1, 40, "farmMax")
+toggle(pFarm, "Notifications", "notify")
+
+-- ----- Animations -----
+local pAnim = newPage("Animations")
+dropdown(pAnim, "Emotes (R15)", "emote", EMOTE_NAMES)
+button(pAnim, "Play Emote", function() playAnim(EMOTES[C.emote]) end)
+textbox(pAnim, "ID анімації", "animId", "наприклад 507771019")
+slider(pAnim, "Швидкість (x0.1)", 1, 40, "animSpeed", function(v) if track then track:AdjustSpeed(v / 10) end end)
+button(pAnim, "Play", function() playAnim(C.animId) end)
+button(pAnim, "Stop", function() if track then track:Stop() end end)
+button(pAnim, "Додати ID в Favorites", function()
+	local id = C.animId:gsub("%D", "")
+	if id ~= "" and not table.find(favs, id) then table.insert(favs, id) notify("Додано") end
+end)
+dropdown(pAnim, "Favorites", "animFav", function() return favs end)
+button(pAnim, "Play Favorite", function() playAnim(C.animFav) end)
+local animInfo = infoLabel(pAnim, 40)
+
+-- ----- Music -----
+local pMusic = newPage("Music")
+textbox(pMusic, "ID музики", "musicId", "ID з Creator Store")
+button(pMusic, "Play", function() playMusic(C.musicId) end)
+button(pMusic, "Pause", function() music:Pause() end)
+button(pMusic, "Resume", function() music:Resume() end)
+button(pMusic, "Stop", function() music:Stop() end)
+slider(pMusic, "Volume", 0, 10, "volume", function() A.musicApply() end)
+slider(pMusic, "Pitch / швидкість (x0.1)", 5, 20, "pitch", function() A.musicApply() end)
+toggle(pMusic, "Loop", "loop", function() A.musicApply() end)
+toggle(pMusic, "Boombox (3D з голови, лише для тебе)", "boombox", function() A.musicApply() end)
+toggle(pMusic, "Reverb", "reverb", function() A.musicApply() end)
+toggle(pMusic, "Echo", "echo", function() A.musicApply() end)
+toggle(pMusic, "Distortion", "distortion", function() A.musicApply() end)
+button(pMusic, "Додати ID в My Songs", function()
+	local id = C.musicId:gsub("%D", "")
+	if id ~= "" and not table.find(songs, id) then table.insert(songs, id) notify("Додано") end
+end)
+dropdown(pMusic, "My Songs", "musicSel", function() return songs end)
+button(pMusic, "Play з My Songs", function() playMusic(C.musicSel) end)
+
+-- ----- Chat -----
+local pChat = newPage("Chat")
+textbox(pChat, "Повідомлення", "chatMsg", "текст для чату")
+button(pChat, "Send", function() sendChat(C.chatMsg) end)
+dropdown(pChat, "Quick Messages", "quickMsg", {"GG", "Nice", "Run!", "Good game", "Hello"})
+button(pChat, "Send Quick Message", function() sendChat(C.quickMsg) end)
+
+-- ----- Users -----
+local pUsers = newPage("Users")
+toggle(pUsers, "Показувати ролі", "userRoles")
+toggle(pUsers, "Показувати дистанцію", "userDist")
+local connInfo = infoLabel(pUsers, 72)
+local userList, userListFrame = infoLabel(pUsers, 60)
+
+-- ----- Mobile -----
+local pMobile = newPage("Mobile")
+toggle(pMobile, "Mobile UI (кнопки на екрані)", "mobileUI", function() layoutMobile() end)
+slider(pMobile, "Button Size", 40, 110, "btnSize", function() layoutMobile() end)
+slider(pMobile, "Button Position X (%)", 5, 95, "btnX", function() layoutMobile() end)
+slider(pMobile, "Button Position Y (%)", 5, 80, "btnY", function() layoutMobile() end)
+
+-- ----- Config Hub -----
+local pCfg = newPage("Config Hub")
+textbox(pCfg, "Назва конфіга", "cfgName")
+button(pCfg, "Create / Save Config", function()
+	if C.cfgName ~= "" then configs[C.cfgName] = copyC() notify("Збережено: " .. C.cfgName) end
+end)
+dropdown(pCfg, "Load Config", "cfgSel", function()
+	local t = {}
+	for k in pairs(configs) do table.insert(t, k) end
+	table.sort(t)
+	return t
+end)
+button(pCfg, "Load вибраний", function()
+	if configs[C.cfgSel] then applyConfig(configs[C.cfgSel]) notify("Завантажено") end
+end)
+button(pCfg, "Delete вибраний", function()
+	configs[C.cfgSel] = nil
+	C.cfgSel = ""
+	reg.cfgSel()
+end)
+dropdown(pCfg, "Config Presets", "cfgPreset", PRESET_NAMES)
+button(pCfg, "Apply Preset", function() applyConfig(PRESETS[C.cfgPreset]) notify("Пресет: " .. C.cfgPreset) end)
+local cfgBox = textbox(pCfg, "Export / Import (текст конфіга)", nil, "встав сюди текст для Import")
+button(pCfg, "Export Config (текст з'явиться вище)", function()
+	cfgBox.Text = HttpService:JSONEncode(C)
+end)
+button(pCfg, "Import Config (з тексту вище)", function()
+	local ok, t = pcall(HttpService.JSONDecode, HttpService, cfgBox.Text)
+	if ok and type(t) == "table" then applyConfig(t) notify("Імпортовано") else notify("Невірний текст") end
+end)
+button(pCfg, "Reset Config (усе за замовчуванням)", function() applyConfig(DEFAULTS) notify("Скинуто") end)
+
+-- ----- Settings -----
+local pSet = newPage("Settings")
+slider(pSet, "UI Scale (%)", 50, 150, "uiScale", function() applyUI() end)
+slider(pSet, "UI Opacity (прозорість %)", 0, 70, "uiOpacity", function() applyUI() end)
+dropdown(pSet, "Menu Key", "menuKey", {"RightShift", "RightControl", "Insert", "K", "M", "F6"})
+toggle(pSet, "Animations (відкриття меню)", "openAnim")
+dropdown(pSet, "Theme", "theme", THEME_NAMES, function() applyUI() end)
+toggle(pSet, "Low Performance (без скелета, рідше кадри)", "lowPerf")
+slider(pSet, "ESP оновлення (1 = кожен кадр, 5 = рідше)", 1, 5, "espEvery")
+button(pSet, "Reset Settings (вкладка Settings)", function()
+	resetKeys({"uiScale", "uiOpacity", "menuKey", "openAnim", "theme", "lowPerf", "espEvery"})
+end)
+
+-- ----- Server -----
+local pServer = newPage("Server")
+local srvInfo = infoLabel(pServer, 90)
+local jobBox = textbox(pServer, "Server ID (JobId)", nil)
+jobBox.Text = game.JobId ~= "" and game.JobId or "Studio (немає JobId)"
+button(pServer, "Rejoin", function() TS:Teleport(game.PlaceId, plr) end)
+
+newPage("Search", true)
+
+-- ================= пошук =================
+local function buildSearch(q)
+	local sp = pages["Search"].page
+	for _, c in ipairs(sp:GetChildren()) do if c:IsA("GuiObject") then c:Destroy() end end
+	q = q:lower()
+	local n = 0
+	for _, it in ipairs(allItems) do
+		if it.name:lower():find(q, 1, true) and n < 40 then
+			n += 1
+			local b = new("TextButton", {Size = UDim2.new(1, -8, 0, 30), BackgroundColor3 = MID, TextColor3 = WHITE,
+				Text = it.name .. "   [" .. it.tab .. "]", Font = Enum.Font.Gotham, TextSize = 12, LayoutOrder = n}, sp)
+			corner(b, 8)
+			b.Activated:Connect(function()
+				lastPage = it.tab
+				searchBox.Text = ""
+				showPage(it.tab)
+			end)
+		end
+	end
+	if n == 0 then
+		new("TextLabel", {Size = UDim2.new(1, -8, 0, 30), BackgroundTransparency = 1, Text = "Нічого не знайдено",
+			TextColor3 = WHITE, Font = Enum.Font.Gotham, TextSize = 12}, sp)
+	end
+end
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+	if searchBox.Text == "" then showPage(lastPage) else buildSearch(searchBox.Text) showPage("Search") end
+end)
+
+-- ================= відкриття / закриття / тема =================
+local fullSize = main.Size
+local collapsed = false
+collapseBtn.Activated:Connect(function()
+	collapsed = not collapsed
+	body.Visible = not collapsed
+	main.Size = collapsed and UDim2.fromOffset(W, 34) or fullSize
+end)
+
+local function setMenu(vis)
+	menuOpen = vis
+	local target = C.uiScale / 100
+	local tr = C.uiOpacity / 100
+	if vis then
+		main.Visible = true
+		if C.openAnim then
+			main.GroupTransparency = 1
+			uiScale.Scale = target * 0.9
+			TweenService:Create(main, TweenInfo.new(0.2), {GroupTransparency = tr}):Play()
+			TweenService:Create(uiScale, TweenInfo.new(0.2), {Scale = target}):Play()
+		else
+			main.GroupTransparency = tr
+			uiScale.Scale = target
+		end
+	else
+		if C.openAnim then
+			TweenService:Create(main, TweenInfo.new(0.2), {GroupTransparency = 1}):Play()
+			task.delay(0.22, function() if not menuOpen then main.Visible = false end end)
+		else
+			main.Visible = false
+		end
+	end
+end
+closeBtn.Activated:Connect(function() setMenu(false) end)
+
+local openBtn = new("TextButton", {Size = UDim2.fromOffset(44, 44), Position = UDim2.new(0, 10, 0.5, -22), Text = "FH",
+	TextColor3 = WHITE, Font = Enum.Font.GothamBold, TextSize = 14}, gui)
+corner(openBtn, 22)
+themed(function() openBtn.BackgroundColor3 = accent() end)
+openBtn.Activated:Connect(function() setMenu(not menuOpen) end)
+UIS.InputBegan:Connect(function(i, gp)
+	if not gp and i.UserInputType == Enum.UserInputType.Keyboard and i.KeyCode.Name == C.menuKey then
+		setMenu(not menuOpen)
+	end
+end)
+
+applyUI = function()
+	for _, fn in ipairs(themeFns) do fn() end
+	if menuOpen then
+		uiScale.Scale = C.uiScale / 100
+		main.GroupTransparency = C.uiOpacity / 100
+	end
+	layoutMobile()
+	A.musicApply()
+end
+
+-- ================= головні цикли =================
+local fpsSmooth, frameN, lastFov, lastGrav = 60, 0, nil, 196
+local bv, wasGhost = nil, false
+
+RS.RenderStepped:Connect(function(dt)
+	cam = workspace.CurrentCamera
+	fpsSmooth = fpsSmooth * 0.9 + (1 / math.max(dt, 0.001)) * 0.1
+	if C.fovCam ~= lastFov then cam.FieldOfView = C.fovCam lastFov = C.fovCam end
+
+	circle.Visible = C.aim and C.fovCircle
+	if circle.Visible then
+		circle.Size = UDim2.fromOffset(C.fov * 2, C.fov * 2)
+		circleStroke.Color = COLORS[C.fovColor] or COLORS.Blue
+	end
+
+	local previewPart
+	if C.aim or C.autoShoot or C.hitPreview then
+		local pos, _, part, sd = getTarget(false)
+		if pos then
+			previewPart = part
+			if C.aim then
+				cam.CFrame = cam.CFrame:Lerp(CFrame.lookAt(cam.CFrame.Position, pos), math.clamp(C.smooth / 100, 0.03, 1))
+			end
+			if C.autoShoot and tick() - T.shoot > C.shootDelay / 10 and ((not C.aim) or sd < 70) then
+				T.shoot = tick()
+				A.shoot()
+			end
+		end
+	end
+	previewAdorn.Adornee = previewPart
+	previewAdorn.Visible = C.hitPreview and previewPart ~= nil
+
+	frameN += 1
+	local every = C.lowPerf and math.max(3, C.espEvery) or C.espEvery
+	local _, _, myRoot = charParts()
+	local rainbow = Color3.fromHSV(tick() % 5 / 5, 1, 1)
+	if myRoot and frameN % every == 0 then
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= plr then
+				local o = espObjs[p] or mkObjs(p)
+				updatePlayerESP(p, o, myRoot, rainbow)
+			end
+		end
+	elseif not myRoot then
+		for _, o in pairs(espObjs) do hideObjs(o) end
+	end
+	updateRadar(myRoot, rainbow)
+end)
+
+RS.Heartbeat:Connect(function()
+	if C.gravity ~= lastGrav then workspace.Gravity = C.gravity lastGrav = C.gravity end
+	local char, hum, root = charParts()
+	if not (char and hum and root) then return end
+
+	hum.WalkSpeed = C.speed
+	hum.UseJumpPower = true
+	hum.JumpPower = C.jump * (C.highJump and 2 or 1)
+
+	-- fly
+	if C.fly then
+		if not bv or bv.Parent ~= root then
+			if bv then bv:Destroy() end
+			bv = new("BodyVelocity", {MaxForce = Vector3.new(1e5, 1e5, 1e5), Velocity = Vector3.zero}, root)
+		end
+		local dir = hum.MoveDirection
+		local vert = (UIS:IsKeyDown(Enum.KeyCode.Space) and 1 or 0) - (UIS:IsKeyDown(Enum.KeyCode.LeftControl) and 1 or 0)
+		if dir.Magnitude > 0 then
+			local look = cam.CFrame.LookVector
+			local flat = Vector3.new(look.X, 0, look.Z)
+			local sign = (flat.Magnitude > 0 and dir:Dot(flat.Unit) < 0) and -1 or 1
+			bv.Velocity = look * C.flySpeed * sign + Vector3.new(0, vert * C.flySpeed, 0)
+		else
+			bv.Velocity = Vector3.new(0, vert * C.flySpeed, 0)
+		end
+	elseif bv then
+		bv:Destroy()
+		bv = nil
+	end
+
+	-- spin
+	if C.spin then
+		local a = math.rad(C.spinSpeed)
+		if C.spinMode == "Right" then a = -a
+		elseif C.spinMode == "Jitter" then a = math.rad(math.random(-C.spinSpeed * 4, C.spinSpeed * 4)) end
+		root.CFrame = root.CFrame * CFrame.Angles(0, a, 0)
+	end
+
+	-- bhop
+	if C.bhop and UIS:IsKeyDown(Enum.KeyCode.Space) and hum.FloorMaterial ~= Enum.Material.Air then
+		local v = root.AssemblyLinearVelocity
+		root.AssemblyLinearVelocity = Vector3.new(v.X, C.bhopPower, v.Z)
+	end
+
+	-- напівпрозорий
+	if C.ghost or wasGhost then
+		for _, p in ipairs(char:GetDescendants()) do
+			if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then p.Transparency = C.ghost and 0.6 or 0 end
+		end
+		wasGhost = C.ghost
+	end
+
+	-- автоудар / автокидок
+	if C.stab and tick() - T.stab > C.stabDelay / 10 then
+		if nearest(C.stabTp and C.tpRange or C.stabRange) then
+			T.stab = tick()
+			A.stab()
+		end
+	end
+	if C.autoThrow and tick() - T.throw > C.throwDelay / 10 then
+		if nearest(C.throwRange, true) and not nearest(C.stabRange) then
+			T.throw = tick()
+			A.throw()
+		end
+	end
+end)
+
+RS.Stepped:Connect(function()
+	if not C.noclip or not plr.Character then return end
+	for _, p in ipairs(plr.Character:GetDescendants()) do
+		if p:IsA("BasePart") then p.CanCollide = false end
+	end
+end)
+
+UIS.JumpRequest:Connect(function()
+	local _, hum, root = charParts()
+	if not (hum and root) then return end
+	if C.infJump then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+	if C.wallHop then
+		local params = RaycastParams.new()
+		params.FilterDescendantsInstances = {plr.Character}
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		if workspace:Raycast(root.Position, root.CFrame.LookVector * 3, params) then
+			local v = root.AssemblyLinearVelocity
+			root.AssemblyLinearVelocity = Vector3.new(v.X, C.bhopPower, v.Z)
+		end
+	end
+end)
+
+-- ферма
+task.spawn(function()
+	while true do
+		task.wait(math.max(1, C.farmInterval))
+		if C.farm then
+			local n = collect(C.coinName, "farm")
+			if n > 0 then notify("Зібрано монет: " .. n) end
+		end
+		if C.collectItems then
+			local n = collect(C.itemName, "collectItems")
+			if n > 0 then notify("Зібрано предметів: " .. n) end
+		end
+	end
+end)
+
+-- інформаційні панелі
+task.spawn(function()
+	local startT = tick()
+	while task.wait(1) do
+		if main.Visible and not collapsed then
+			if pages["Animations"].page.Visible then
+				animInfo.Text = track and ("Грає: " .. tostring(track.IsPlaying) .. " | довжина: " .. string.format("%.1f", track.Length) .. " с")
+					or "Анімація не запущена"
+			end
+			local ping = 0
+			pcall(function() ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
+			if pages["Users"].page.Visible then
+				connInfo.Text = string.format("Ping: %d мс\nFPS: %d\nГравців: %d / %d", ping, fpsSmooth, #Players:GetPlayers(), Players.MaxPlayers)
+				local _, _, myRoot = charParts()
+				local lines = {}
+				for _, p in ipairs(Players:GetPlayers()) do
+					local line = p.Name
+					if C.userRoles then line ..= "  [" .. roleOf(p) .. "]" end
+					local _, h, r = charParts(p)
+					if C.userDist and r and myRoot then line ..= "  " .. math.floor((r.Position - myRoot.Position).Magnitude) .. "m" end
+					if h then line ..= "  " .. math.floor(h.Health) .. "hp" end
+					table.insert(lines, line)
+				end
+				userList.Text = table.concat(lines, "\n")
+				userListFrame.Size = UDim2.new(1, -8, 0, 14 + #lines * 15)
+				userList.Size = UDim2.new(1, -16, 0, #lines * 15 + 6)
+			end
+			if pages["Server"].page.Visible then
+				srvInfo.Text = string.format("PlaceId: %d\nГравців: %d / %d\nPing: %d мс | FPS: %d\nУ грі: %d с",
+					game.PlaceId, #Players:GetPlayers(), Players.MaxPlayers, ping, fpsSmooth, tick() - startT)
+			end
+		end
+	end
+end)
+
+plr.CharacterAdded:Connect(function() task.wait(1) A.musicApply() end)
+
+-- ================= старт =================
+if AUTOLOAD ~= "" then
+	local ok, t = pcall(HttpService.JSONDecode, HttpService, AUTOLOAD)
+	if ok and type(t) == "table" then applyConfig(t) end
+end
+showPage("Sheriff")
+applyUI()
+setMenu(true)
